@@ -1,0 +1,372 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, classification_report
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from PIL import Image
+import os
+
+df = pd.read_csv("/storage/emulated/0/Documents/mineral_data.csv")
+print("Dimensions :", df.shape)
+
+features = [
+    "latitude", "longitude", "elevation",
+    "magnetic_anomaly", "distance_fault", "copper_indicator"
+]
+
+X = df[features].replace([np.inf, -np.inf], np.nan).fillna(df[features].median())
+y = df["mineral_presence"].fillna(df["mineral_presence"].mode()[0])
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.20, random_state=42, stratify=y
+)
+
+model = RandomForestClassifier(
+    n_estimators=300, random_state=42, class_weight="balanced"
+)
+
+model.fit(X_train, y_train)
+y_pred = model.predict(X_test)
+accuracy = accuracy_score(y_test, y_pred)
+
+print("\nRandom Forest Accuracy :", round(accuracy, 4))
+print("\nRapport de classification :")
+print(classification_report(y_test, y_pred))
+
+df["prediction"] = model.predict(X)
+df["probability"] = model.predict_proba(X)[:, 1]
+
+absence = df["prediction"] == 0
+presence = df["prediction"] == 1
+
+print("\nPrésence :", presence.sum())
+print("Absence :", absence.sum())
+
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+n_clusters = 3
+
+kmeans = KMeans(
+    n_clusters=n_clusters, random_state=42, n_init=10
+)
+
+df["cluster"] = kmeans.fit_predict(X_scaled)
+
+print("\nPoints par cluster :")
+print(df["cluster"].value_counts().sort_index())
+
+pca = PCA(n_components=2)
+X_pca = pca.fit_transform(X_scaled)
+
+df["PCA1"] = X_pca[:, 0]
+df["PCA2"] = X_pca[:, 1]
+
+variance = pca.explained_variance_ratio_.sum() * 100
+
+print("\nVariance expliquée par PCA :", round(variance, 2), "%")
+
+cluster_colors = ["red", "blue", "green"]
+
+plt.figure(figsize=(12, 9))
+
+for i in range(n_clusters):
+    data = df[df["cluster"] == i]
+    plt.scatter(
+        data["PCA1"], data["PCA2"],
+        color=cluster_colors[i], s=70, alpha=0.8,
+        edgecolors="black", label=f"Cluster {i + 1}"
+    )
+
+plt.title(
+    "K-Means visualisé avec PCA\n"
+    "Groupes de similarité des données minières"
+)
+plt.xlabel("PCA 1")
+plt.ylabel("PCA 2")
+plt.axhline(0, color="gray", linewidth=0.8, alpha=0.5)
+plt.axvline(0, color="gray", linewidth=0.8, alpha=0.5)
+plt.legend(title="Clusters")
+plt.grid(alpha=0.3)
+plt.tight_layout()
+plt.savefig("kmeans_pca_clusters.png", dpi=150, bbox_inches="tight")
+plt.show()
+
+print("\nClusters et présence de cuivre :")
+print(pd.crosstab(df["cluster"], df["mineral_presence"]))
+
+plt.figure(figsize=(12, 9))
+
+for i in range(n_clusters):
+    data = df[df["cluster"] == i]
+    plt.scatter(
+        data["longitude"], data["latitude"],
+        color=cluster_colors[i], s=70, alpha=0.8,
+        edgecolors="black", label=f"Cluster {i + 1}"
+    )
+
+plt.title("Clustering géospatial par K-Means")
+plt.xlabel("Longitude")
+plt.ylabel("Latitude")
+plt.legend(title="Clusters")
+plt.grid(alpha=0.3)
+plt.tight_layout()
+plt.savefig("kmeans_clusters.png", dpi=150, bbox_inches="tight")
+plt.show()
+
+plt.figure(figsize=(12, 9))
+
+plt.scatter(
+    df.loc[absence, "longitude"],
+    df.loc[absence, "latitude"],
+    color="black", s=50, alpha=0.8,
+    label="Absence de cuivre"
+)
+
+plt.scatter(
+    df.loc[presence, "longitude"],
+    df.loc[presence, "latitude"],
+    color="yellow", s=90,
+    edgecolors="black",
+    label="Présence de cuivre"
+)
+
+plt.title("Classification des 500 points\nRandom Forest")
+plt.xlabel("Longitude")
+plt.ylabel("Latitude")
+plt.legend(title="Classification")
+plt.grid(alpha=0.3)
+plt.tight_layout()
+plt.savefig("random_forest_classification.png", dpi=150, bbox_inches="tight")
+plt.show()
+
+plt.figure(figsize=(13, 10))
+
+for i in range(n_clusters):
+    data = df[df["cluster"] == i]
+
+    for prediction, marker, size, label in [
+        (0, "o", 55, "absence"),
+        (1, "*", 140, "présence")
+    ]:
+        subset = data[data["prediction"] == prediction]
+
+        plt.scatter(
+            subset["longitude"], subset["latitude"],
+            color=cluster_colors[i], marker=marker, s=size,
+            alpha=0.8, edgecolors="black",
+            label=f"Cluster {i + 1} - {label}"
+        )
+
+plt.title(
+    "K-Means + Random Forest\n"
+    "Clustering et prédiction de présence de cuivre"
+)
+plt.xlabel("Longitude")
+plt.ylabel("Latitude")
+plt.legend(bbox_to_anchor=(1.02, 1), loc="upper left")
+plt.grid(alpha=0.3)
+plt.tight_layout()
+plt.savefig("kmeans_random_forest_combined.png", dpi=150, bbox_inches="tight")
+plt.show()
+
+images = []
+frames = range(1, len(df) + 1, 5)
+
+xmin, xmax = df["longitude"].min(), df["longitude"].max()
+ymin, ymax = df["latitude"].min(), df["latitude"].max()
+
+for frame in frames:
+    data = df.iloc[:frame]
+    fig, ax = plt.subplots(figsize=(10, 8))
+
+    ax.scatter(
+        data.loc[data["prediction"] == 0, "longitude"],
+        data.loc[data["prediction"] == 0, "latitude"],
+        color="black", s=45, alpha=0.85,
+        label="Absence de cuivre"
+    )
+
+    ax.scatter(
+        data.loc[data["prediction"] == 1, "longitude"],
+        data.loc[data["prediction"] == 1, "latitude"],
+        color="red", s=75, edgecolors="black",
+        label="Présence de cuivre"
+    )
+
+    ax.set(
+        xlim=(xmin, xmax), ylim=(ymin, ymax),
+        xlabel="Longitude", ylabel="Latitude",
+        title=(
+            "Classification géospatiale par Random Forest\n"
+            f"Points analysés : {frame} / {len(df)}"
+        )
+    )
+
+    ax.legend()
+    ax.grid(alpha=0.3)
+    plt.tight_layout()
+
+    filename = f"_frame_{frame}.png"
+    fig.savefig(filename, dpi=100, bbox_inches="tight")
+    plt.close(fig)
+
+    images.append(Image.open(filename).convert("RGB").copy())
+    os.remove(filename)
+
+images[0].save(
+    "random_forest_500_points.gif",
+    save_all=True,
+    append_images=images[1:],
+    duration=100,
+    loop=0
+)
+
+print("\nGIF créé : random_forest_500_points.gif")
+print("Nombre de frames :", len(images))
+
+kmeans_images = []
+
+for frame in frames:
+    data = df.iloc[:frame]
+    fig, ax = plt.subplots(figsize=(10, 8))
+
+    for i in range(n_clusters):
+        subset = data[data["cluster"] == i]
+
+        ax.scatter(
+            subset["longitude"], subset["latitude"],
+            color=cluster_colors[i], s=65, alpha=0.8,
+            edgecolors="black", label=f"Cluster {i + 1}"
+        )
+
+    ax.set(
+        xlim=(xmin, xmax), ylim=(ymin, ymax),
+        xlabel="Longitude", ylabel="Latitude",
+        title=(
+            "Clustering géospatial par K-Means\n"
+            f"Points analysés : {frame} / {len(df)}"
+        )
+    )
+
+    ax.legend(title="Clusters")
+    ax.grid(alpha=0.3)
+    plt.tight_layout()
+
+    filename = f"_kmeans_frame_{frame}.png"
+    fig.savefig(filename, dpi=100, bbox_inches="tight")
+    plt.close(fig)
+
+    kmeans_images.append(Image.open(filename).convert("RGB").copy())
+    os.remove(filename)
+
+kmeans_images[0].save(
+    "kmeans_500_points.gif",
+    save_all=True,
+    append_images=kmeans_images[1:],
+    duration=100,
+    loop=0
+)
+
+print("\nGIF créé : kmeans_500_points.gif")
+print("Nombre de frames K-Means :", len(kmeans_images))
+
+combined_images = []
+
+for frame in frames:
+    data = df.iloc[:frame]
+    fig, ax = plt.subplots(figsize=(11, 9))
+
+    for i in range(n_clusters):
+        cluster_data = data[data["cluster"] == i]
+
+        for prediction, marker, size, label in [
+            (0, "o", 45, "absence"),
+            (1, "*", 100, "présence")
+        ]:
+            subset = cluster_data[
+                cluster_data["prediction"] == prediction
+            ]
+
+            ax.scatter(
+                subset["longitude"], subset["latitude"],
+                color=cluster_colors[i], marker=marker, s=size,
+                alpha=0.8, edgecolors="black",
+                label=f"Cluster {i + 1} - {label}"
+            )
+
+    ax.set(
+        xlim=(xmin, xmax), ylim=(ymin, ymax),
+        xlabel="Longitude", ylabel="Latitude",
+        title=(
+            "K-Means + Random Forest\n"
+            "Clustering et prédiction de présence de cuivre\n"
+            f"Points analysés : {frame} / {len(df)}"
+        )
+    )
+
+    ax.legend(bbox_to_anchor=(1.02, 1), loc="upper left")
+    ax.grid(alpha=0.3)
+    plt.tight_layout()
+
+    filename = f"_combined_frame_{frame}.png"
+    fig.savefig(filename, dpi=100, bbox_inches="tight")
+    plt.close(fig)
+
+    combined_images.append(Image.open(filename).convert("RGB").copy())
+    os.remove(filename)
+
+combined_images[0].save(
+    "kmeans_random_forest_500_points.gif",
+    save_all=True,
+    append_images=combined_images[1:],
+    duration=100,
+    loop=0
+)
+
+print("\nGIF créé : kmeans_random_forest_500_points.gif")
+print("Nombre de frames combinées :", len(combined_images))
+
+importance = pd.DataFrame({
+    "variable": features,
+    "importance": model.feature_importances_
+}).sort_values("importance", ascending=False)
+
+print("\nImportance des variables :")
+print(importance)
+
+print("\nRésultats des 20 premiers points :")
+print(
+    df[
+        [
+            "latitude", "longitude", "mineral_presence",
+            "prediction", "probability", "cluster", "PCA1", "PCA2"
+        ]
+    ].head(20)
+)
+
+df.to_csv("random_forest_kmeans_500_points.csv", index=False)
+
+print("\n========================================")
+print("PROJET TERMINÉ")
+print("========================================")
+print("Random Forest Accuracy :", round(accuracy, 4))
+print("Nombre de clusters :", n_clusters)
+print("Total de points :", len(df))
+print("Présence prédite :", presence.sum())
+print("Absence prédite :", absence.sum())
+print("Variance PCA :", round(variance, 2), "%")
+
+print("\nFichiers créés :")
+print("- kmeans_pca_clusters.png")
+print("- kmeans_clusters.png")
+print("- random_forest_classification.png")
+print("- kmeans_random_forest_combined.png")
+print("- random_forest_500_points.gif")
+print("- kmeans_500_points.gif")
+print("- kmeans_random_forest_500_points.gif")
+print("- random_forest_kmeans_500_points.csv")
